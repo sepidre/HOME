@@ -1,0 +1,17 @@
+{
+    "sshfs.configs": [
+        {
+            "name": "HOMEcloud",
+            "username": "root",
+            "host": "HOMEcloud",
+            "label": "HOMEcloud"
+        },
+        {
+            "name": "HOMEservices01",
+            "label": "HOMEservices01",
+            "host": "192.168.1.20",
+            "username": "sepidre",
+            "privateKeyPath": "c:\\Users\\StephanDreis\\.ssh\\id_rsa"
+        }
+    ]
+}

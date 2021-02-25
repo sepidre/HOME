@@ -1,0 +1,111 @@
+#cloud-config
+# vim: syntax=yaml
+#
+
+# The current version of cloud-init in the Hypriot rpi-64 is 0.7.9
+# When dealing with cloud-init, it is SUPER important to know the version
+# I have wasted many hours creating servers to find out the module I was trying to use wasn't in the cloud-init version I had
+# Documentation: http://cloudinit.readthedocs.io/en/0.7.9/index.html
+
+# Set your hostname here, the manage_etc_hosts will update the hosts file entries as well
+
+hostname: "HOMEcloud"
+manage_etc_hosts: true
+
+#OPTIONAL A PASSWORD CAN BE ENOUGHT
+# add each entry to ~/.ssh/authorized_keys for the configured user or the
+# first user defined in the user definition directive.
+ssh_authorized_keys:
+  - ssh-rsa AVERYLONGSTRING
+  
+# Send pre-generated SSH private keys to the server
+# If these are present, they will be written to /etc/ssh and
+# new random keys will not be generated
+#  in addition to 'rsa' and 'dsa' as shown below, 'ecdsa' is also supported
+ssh_keys:
+  rsa_private: |
+   -----BEGIN OPENSSH PRIVATE KEY-----
+   SOME LINES OF
+   STRINGS
+   -----END OPENSSH PRIVATE KEY-----
+    
+  rsa_public: ssh-rsa AVERYLONGSTRING
+#OPTIONAL END A PASSWORD CAN BE ENOUGHT  
+
+
+# You could modify this for your own user information
+users:
+  - name: "USERNAME"
+    gecos: "Master of HOME"
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    groups: users,docker,video,root
+    passwd: HASHED PWD
+    ssh_pwauth: false  # Must be true if there is no ssh Key
+    ssh_authorized_keys:
+      - ssh-rsa AVERYLONGSTRING
+
+# # Set the locale of the system
+locale: "de_DE.UTF-8"
+
+# # Set the timezone
+# # Value of 'timezone' must exist in /usr/share/zoneinfo
+timezone: "Europe/Berlin"
+
+# # Update apt packages on first boot
+package_upgrade: true
+package_update: true
+package_reboot_if_required: true
+
+# # Install any additional apt packages you need here
+packages:
+ - ntp
+ - sshfs
+ - acl
+ - htop
+ 
+# These commands will be ran once on first boot only
+runcmd:
+  # Pickup the hostname changes
+  - 'cp /etc/ssh/ssh_host_rsa_key /home/USERNAME/.ssh/id_rsa'
+  - 'chown USERNAME /home/USERNAME/.ssh/id_rsa && chmod 600 /home/USERNAME/.ssh/id_rsa'
+  - 'systemctl restart avahi-daemon'
+
+  # Build some Systemtweaks 
+  - 'ifdown wlan0'
+
+  #Optional if you want to mount a usb stick for data
+  - '[ ! -d "/mnt/conainers" ] && mkdir /mnt/containers/'
+  - 'echo UUID="219f4d57-bd5e-42a6-aeee-41306e580efc" /mnt/containers/ ext4 defaults,auto,users,rw,nofail,acl 0 0 >> /etc/fstab'
+  - 'sudo mount -a'
+
+  #- 'usermod -aG docker root'
+  - 'chmod -R 775 /mnt/containers/'
+  - 'chmod g+s /mnt/containers/'
+  - 'setfacl -Rdm u:USERNAME:rwx /mnt/containers/'
+  - 'setfacl -Rdm g:docker:rwx /mnt/containers/'
+  - '[ ! -d "/mnt/conainers/services" ] && cp -rf /boot/containers /mnt/'
+  #- 'rm -rf /boot/containers'
+  
+  - 'systemctl daemon-reload'
+
+  # Docker Build Commandos
+  - echo 'DOCKERPWD' | docker login --username 'DOCKERUSER' --password-stdin
+  - 'echo "@reboot sleep 300 && cd /mnt/containers/cloud && /usr/local/bin/docker-compose --env-file /mnt/containers/secrets/.env up -d" >> /etc/crontab'
+  - 'cd /mnt/containers/cloud && docker-compose --env-file /mnt/containers/secrets/.env up -d'
+
+  # Backup Cronjobs
+  - 'echo "0  4  1 * *   root    docker exec -it home-db mysqldump --user=root --password=seafileDBPASSWORD --opt ccnet_db > /mnt/containers/bkp/seafile/ccnet_db_$(date +%Y%m%d).sql" >> /etc/crontab'
+  - 'echo "30  4  1 * *   root    docker exec -it home-db mysqldump --user=root --password=seafileDBPASSWORD --opt seafile_db > /mnt/containers/bkp/seafile/seafile_db_$(date +%Y%m%d).sql" >> /etc/crontab'
+  - 'echo "0  5  1 * *   root    docker exec -it home-db mysqldump --user=root --password=seafileDBPASSWORD --opt seahub_db > /mnt/containers/bkp/seafile/seahub_db_$(date +%Y%m%d).sql" >> /etc/crontab'
+  # Recovery in console
+  # docker exec -it home-db /bin/sh -c "mysql --user=root --password=seafileDBPASSWORD ccnet_db < /shared/ccnet_db.sql"
+  # docker exec -it home-db /bin/sh -c "mysql --user=root --password=seafileDBPASSWORD seafile_db < /shared/seafile_db.sql"
+  # docker exec -it home-db /bin/sh -c "mysql --user=root --password=seafileDBPASSWORD seahub_db < /shared/seahub_db.sql"
+
+    # Docker Traefik Build Commandos
+  - 'chown -Rf USERNAME:docker /mnt/*'
+  - 'chmod -Rf 775 /mnt/containers'
+  - 'chown -Rf www-data:docker /mnt/containers/webdav'
+
+  - 'reboot now'

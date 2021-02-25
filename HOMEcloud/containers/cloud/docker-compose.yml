@@ -1,0 +1,204 @@
+version: '3.8'
+
+networks:
+ seafile-net:
+
+services:
+ cloudflare-ddns:
+  container_name: cloudi-pi
+  image: oznu/cloudflare-ddns:latest
+  restart: unless-stopped
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: ${TZ}
+   API_KEY: ${cloudflareapi}
+   ZONE: ${cloudflarezone}
+   DNS_SERVER: 1.1.1.1
+  volumes:
+   - /etc/localtime:/etc/localtime:ro
+
+ jelly-pi:
+  image: jellyfin/jellyfin
+  container_name: jelly-pi
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: ${TZ}
+  volumes:
+   - ${dockermedia}/jelly-pi:/config
+   - ${dockermedia}/data/tvseries:/data/tvshows
+   - ${dockermedia}/data/movies:/data/movies
+   - /opt/vc/lib:/opt/vc/lib #optional
+  ports:
+   - 8096:8096
+   - 7359:7359/udp #optional
+   - 1900:1900/udp #optional
+  restart: unless-stopped
+
+   
+ glan-pi:
+  image: jdreinhardt/glances:latest
+  container_name: glan-pi
+  restart: unless-stopped
+  privileged: true
+  ports:
+   - '61208:61208'
+  security_opt:
+   - no-new-privileges:true
+  pid: host
+  volumes:
+   - ${dockermedia}/glan-pi:/etc/glances # Use this if you want to add a glances.conf file
+   - /var/run/docker.sock:/var/run/docker.sock:ro # Use Docker Socket Proxy instead for improved security
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: ${TZ}
+   # GLANCES_OPT: "-C /glances/conf/glances.conf --quiet --export influxdb"
+   GLANCES_OPT: "-w"
+
+## Databases
+ # InfluxDB - Database for sensor data
+ # Create influxdb.conf
+ influx_db:
+  image: influxdb:latest
+  container_name: influx_db
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  ports:
+    - "${influx_db_port}:8086"
+  volumes:
+    - ${dockermedia}/influx_db/influxdb.conf:/etc/influxdb/influxdb.conf:ro
+    - ${dockermedia}/influx_db/db:/var/lib/influxdb
+  command: -config /etc/influxdb/influxdb.conf
+
+  # Redis - Key-value Store
+ redis_db:
+  container_name: redis_db
+  image: redis:latest
+  restart: unless-stopped
+  entrypoint: redis-server --appendonly yes --requirepass ${redis_db_pw} --maxmemory 512mb --maxmemory-policy allkeys-lru
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: ${TZ}
+  ports:
+   - "${redis_db_port}:6379"
+  security_opt:
+   - no-new-privileges:true
+  volumes:
+   - ${dockermedia}/redis/data:/data
+   - /etc/localtime:/etc/localtime:ro
+
+# mysql - Database     
+ mysql_db:
+  image: hypriot/rpi-mysql
+  container_name: mysql_db
+  restart: unless-stopped
+  ports:
+   - "${mysql_db_port}:3306"
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: ${TZ}
+   MYSQL_ROOT_PASSWORD: ${mysql_db_root}
+  volumes:
+   - ${dockermedia}/mysql_db:/var/lib/mysql
+   - /etc/localtime:/etc/localtime:ro
+   - ${dockermedia}/shared:/shared
+     
+ memcached:
+  image: memcached:1.5.6
+  container_name: memcached
+  entrypoint: memcached -m 256
+  restart: unless-stopped
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: ${TZ}
+  volumes:
+   - /etc/localtime:/etc/localtime:ro
+  networks:
+   - seafile-net
+     
+ sea-pi:
+  image: egorive/seafile-mc:7.1.4-rpi
+  container_name: sea-pi
+  domainname: ${domain_WAN}
+  restart: unless-stopped
+  volumes:
+   - ${dockermedia}/seafile/data:/shared
+   - /etc/localtime:/etc/localtime:ro
+  environment:
+   TZ: ${TZ}
+   DB_HOST: ${mysql_db_host}
+   DB_ROOT_PASSWD: ${mysql_db_root}
+   SEAFILE_ADMIN_EMAIL: ${seafile_admin}
+   SEAFILE_ADMIN_PASSWORD: ${seafile_admin_password} 
+   SEAFILE_SERVER_LETSENCRYPT: 'false'
+   TIME_ZONE: ${TZ}
+  depends_on:
+   - mysql_db
+   - memcached
+  networks:
+   - seafile-net
+  ports:
+   - "81:80"
+   ## For a fresh start uncomment
+   #DROP DATABASE seahub_db;
+   #DROP DATABASE seafile_db;
+   #DROP DATABASE ccnet_db;  
+
+ dav-pi:
+  image: ugeek/webdav:arm
+  container_name: dav-pi
+  domainname: ${domain_WAN}
+  restart: unless-stopped
+  volumes:
+   - /etc/localtime:/etc/localtime:ro
+   - /mnt/containers/webdav:/media
+   - ${dockermedia}/shared:/shared
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: ${TZ}
+   USERNAME: ${webdav_user}
+   PASSWORD: ${webdav_password}
+  ports:
+   - "82:80"
+
+ port-pi:
+  image: portainer/portainer
+  container_name: port-pi
+  domainname: ${domain_WAN}
+  restart: unless-stopped
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: ${TZ}
+  volumes:
+   - /etc/localtime:/etc/localtime:ro
+   - /var/run/docker.sock:/var/run/docker.sock
+   - ${dockermedia}/portainer:/data
+   - ${dockermedia}/shared:/shared
+  ports:
+   - "83:9000"
+
+ # Duplicati - Backup
+ bkp-pi:
+  image: linuxserver/duplicati:latest
+  container_name: bkp-pi
+  restart: unless-stopped
+  security_opt:
+   - no-new-privileges:true
+  ports:
+   - "8200:8200"
+  volumes:
+   - ${dockermedia}/duplicati:/config
+   - ${dockermedia}:/nas
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: $TZ
+   # CLI_ARGS: #optional

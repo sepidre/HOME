@@ -1,0 +1,401 @@
+version: '3.8'
+
+networks:
+ proxy:
+  external: true
+ dns-net:
+
+secrets:
+ authelia_jwt_secret:
+  file: ${secrets}/authelia_jwt_secret
+ authelia_session_secret:
+  file: ${secrets}/authelia_session_secret
+ authelia_mysql_password:
+  file: ${secrets}/authelia_mysql_password
+ authelia_notifier_smtp_password:
+  file: ${secrets}/authelia_notifier_smtp_password
+ authelia_duo_api_secret_key:
+  file: ${secrets}/authelia_duo_api_secret_key
+
+services:
+ trae-pi:
+  container_name: trae-pi
+  domainname: ${domain_WAN}
+  image: traefik:latest
+  restart: unless-stopped
+  security_opt:
+   - no-new-privileges:true
+  command:
+   - --global.checkNewVersion=true
+   - --global.sendAnonymousUsage=true
+   - --entryPoints.http.address=:80
+   - --entryPoints.https.address=:443
+   # Allow these IPs to set the X-Forwarded-* headers - Cloudflare IPs: https://www.cloudflare.com/ips/
+   #- --entrypoints.https.forwardedHeaders.trustedIPs=173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/12,172.64.0.0/13,131.0.72.0/22
+   - --entryPoints.traefik.address=:8080
+   - --api=true
+   #- --api.insecure=true
+   #- --serversTransport.insecureSkipVerify=true
+   - --log=true
+   - --log.level=DEBUG # (Default: error) DEBUG, INFO, WARN, ERROR, FATAL, PANIC
+   - --accessLog=true
+   - --accessLog.filePath=/var/lib/traefik/traefik.log
+   - --accessLog.bufferingSize=100 # Configuring a buffer of 100 lines
+   - --accessLog.filters.statusCodes=400-499
+   - --providers.docker=true
+   - --providers.docker.endpoint=unix:///var/run/docker.sock
+   - --providers.docker.exposedByDefault=false
+   #- --entrypoints.https.http.tls.options=tls-opts@file
+   # Add dns-cloudflare as default certresolver for all services. Also enables TLS and no need to specify on individual services.
+   - --entrypoints.https.http.tls.certresolver=dns-cloudflare
+   - --entrypoints.https.http.tls.domains[0].main=${domain_WAN}
+   - --entrypoints.https.http.tls.domains[0].sans=*.${domain_WAN}
+   - --providers.docker.network=proxy
+   - --providers.docker.swarmMode=false
+   - --providers.file.directory=/var/lib/traefik/rules # Load dynamic configuration from one or more .toml or .yml files in a directory.
+   - --providers.file.watch=true # Only works on top level files in the rules folder
+   #- --certificatesResolvers.dns-cloudflare.acme.caServer=https://acme-staging-v02.api.letsencrypt.org/directory # LetsEncrypt Staging Server - uncomment when testing
+   - --certificatesResolvers.dns-cloudflare.acme.email=${cloudflaremail}
+   - --certificatesResolvers.dns-cloudflare.acme.storage=/var/lib/traefik/cert/acme.json
+   - --certificatesResolvers.dns-cloudflare.acme.dnsChallenge.provider=cloudflare
+   - --certificatesResolvers.dns-cloudflare.acme.dnsChallenge.resolvers=1.1.1.1:53
+   - --certificatesResolvers.dns-cloudflare.acme.dnsChallenge.resolvers=1.0.0.1:53
+   - --certificatesResolvers.dns-cloudflare.acme.dnsChallenge.delayBeforeCheck=0 # To delay DNS
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: ${TZ}
+   CF_API_EMAIL: ${cloudflaremail}
+   CF_API_KEY: ${cloudflareglobalapi}
+  labels:
+   - traefik.enable=true
+   # HTTP-to-HTTPS Redirect
+   - traefik.http.routers.http-catchall.entrypoints=http
+   - traefik.http.routers.http-catchall.rule=HostRegexp(`{host:.+}`)
+   - traefik.http.routers.http-catchall.middlewares=redirect-to-https
+   - traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https
+   # HTTP Routers
+   - traefik.http.routers.traefik-rtr.entrypoints=https
+   - traefik.http.routers.traefik-rtr.rule=Host(`trae-pi.${domain_WAN}`)
+   - traefik.http.routers.traefik-rtr.tls=true
+   - traefik.http.routers.traefik-rtr.tls.certresolver=dns-cloudflare
+   ## Services - API
+   - traefik.http.routers.traefik-rtr.service=api@internal
+   ## Middlewares
+   - traefik.http.routers.traefik-rtr.middlewares=chain-authelia@file
+  ports:
+   - target: 80
+     published: 80
+   - target: 443
+     published: 443
+   - target: 8080
+     published: 8080   
+  volumes:
+   - /var/run/docker.sock:/var/run/docker.sock
+   - /etc/localtime:/etc/localtime:ro
+   - ${dockermedia}/shared:/shared
+   - ${dockermedia}/traefik/rules:/var/lib/traefik/rules
+   - ${dockermedia}/traefik/cert/acme.json:/var/lib/traefik/cert/acme.json
+   - ${dockermedia}/traefik/traefik.log:/var/lib/traefik/traefik.log
+  networks:
+   proxy:
+    ipv4_address: 192.168.90.254 # You can specify a static IP
+  dns:
+   - 1.1.1.1
+   
+ vpn:
+  image: bubuntux/nordvpn
+  container_name: vpn-pi
+  network_mode: bridge        # Required
+  cap_add:
+   - NET_ADMIN               # Required
+   - SYS_MODULE              # Required for TECHNOLOGY=NordLynx
+  sysctls:
+   - net.ipv4.conf.all.rp_filter=2
+  devices:
+   - /dev/net/tun            # Required
+  environment:                # Review https://github.com/bubuntux/nordvpn#environment-variables
+   - USER=${vpnuser}     # Required
+   - PASS=${vpnpassword} # Required
+   - CONNECT=Germany
+   - TECHNOLOGY=NordLynx
+   - NETWORK=192.168.1.0/24 
+   - DNS=${localDNS}
+  ports:
+   - ${vpnport}:8080
+
+ auth-pi:
+  container_name: auth-pi
+  # Check this before upgrading: https://github.com/authelia/authelia/blob/master/BREAKING.md
+  image: authelia/authelia:4.22
+  restart: always
+  networks:
+   proxy:
+    ipv4_address: 192.168.90.20 # You can specify a static IP
+  volumes:
+   - ${dockermedia}/auth-pi:/config
+  ports:
+   - target: 9091
+     published: 9091
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: ${TZ}
+   AUTHELIA_JWT_SECRET_FILE: /run/secrets/authelia_jwt_secret
+   AUTHELIA_SESSION_SECRET_FILE: /run/secrets/authelia_session_secret
+   AUTHELIA_STORAGE_MYSQL_PASSWORD_FILE: /run/secrets/authelia_mysql_password
+   AUTHELIA_NOTIFIER_SMTP_PASSWORD_FILE: /run/secrets/authelia_notifier_smtp_password
+   AUTHELIA_DUO_API_SECRET_KEY_FILE: /run/secrets/authelia_duo_api_secret_key
+  secrets:
+   - authelia_jwt_secret
+   - authelia_session_secret
+   - authelia_mysql_password
+   - authelia_notifier_smtp_password
+   - authelia_duo_api_secret_key
+  labels:
+   - "traefik.enable=true"
+   ## HTTP Routers
+   - "traefik.http.routers.auth-pi-rtr.entrypoints=https"
+   - "traefik.http.routers.auth-pi-rtr.rule=Host(`auth-pi.${domain_WAN}`)"
+   ## Middlewares
+   - "traefik.http.routers.auth-pi-rtr.middlewares=chain-authelia@file"
+   ## HTTP Services
+   - "traefik.http.routers.auth-pi-rtr.service=auth-pi-svc"
+   - "traefik.http.services.auth-pi-svc.loadbalancer.server.port=9091"
+
+ phpmy-pi:
+  image: phpmyadmin
+  container_name: phpmy-pi
+  restart: unless-stopped
+  environment:
+   PMA_HOST: ${mysql_db_host}
+   PMA_PORT: ${mysql_db_port}
+   PMA_USER: root
+   PMA_PASSWORD: ${mysql_db_root}
+   PMA_ABSOLUTE_URI: https://phpmy-pi.${domain_WAN}/
+  ports:
+   - '${PHPMYADMIN_PORT}:80'
+  labels:
+   - "traefik.enable=true"
+   ## HTTP Routers
+   - "traefik.http.routers.phpmy-pi-rtr.entrypoints=https"
+   - "traefik.http.routers.phpmy-pi-rtr.rule=Host(`phpmy-pi.${domain_WAN}`)"
+   - "traefik.http.routers.phpmy-pi-rtr.tls=true"
+   ## Middlewares
+   #- "traefik.http.routers.phpmy-pi-rtr.middlewares=chain-no-auth@file" # No Authentication
+   - "traefik.http.routers.phpmy-pi-rtr.middlewares=chain-authelia@file"
+   ## HTTP Services
+   - "traefik.http.routers.phpmy-pi-rtr.service=phpmy-pi-svc"
+   - "traefik.http.services.phpmy-pi-svc.loadbalancer.server.port=80"
+  networks:
+   proxy:
+
+ gua-pi:
+  image: oznu/guacamole:armhf
+  container_name: gua-pi
+  domainname: ${domain_WAN}
+  restart: unless-stopped
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: ${TZ}
+  networks:
+   proxy:
+  volumes:
+   - ${dockermedia}/gua-pi:/config
+   - /etc/localtime:/etc/localtime:ro
+   - ${dockermedia}/shared:/shared
+  labels:
+   - "traefik.enable=true"
+   ## HTTP Routers
+   - "traefik.http.routers.gua-pi-rtr.entrypoints=https"
+   - "traefik.http.routers.gua-pi-rtr.rule=Host(`gua-pi.${domain_WAN}`)"
+   - "traefik.http.routers.gua-pi-rtr.tls=true"
+   ## Middlewares
+   - "traefik.http.routers.gua-pi-rtr.middlewares=chain-authelia@file"
+   ## HTTP Services
+   - "traefik.http.routers.gua-pi-rtr.service=gua-pi-svc"
+   - "traefik.http.services.gua-pi-svc.loadbalancer.server.port=8080"
+  # guacadmin as default user/pwd
+
+ heim-pi:
+  container_name: heim-pi
+  image: linuxserver/heimdall:latest
+  restart: unless-stopped
+  networks:
+   proxy:
+  ports:
+   - '${HEIMDALL_PORT}:80'
+  security_opt:
+   - no-new-privileges:true
+  volumes:
+   - ${dockermedia}/heim-pi:/config
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: ${TZ}
+  labels:
+   - "traefik.enable=true"
+   ## HTTP Routers
+   - "traefik.http.routers.heim-pi-rtr.entrypoints=https"
+   - "traefik.http.routers.heim-pi-rtr.rule=Host(`heim-pi.${domain_WAN}`)"
+   - "traefik.http.routers.heim-pi-rtr.tls=true"
+   ## Middlewares
+   - "traefik.http.routers.heim-pi-rtr.middlewares=chain-authelia@file"
+   ## HTTP Services
+   - "traefik.http.routers.heim-pi-rtr.service=heim-pi-svc"
+   - "traefik.http.services.heim-pi-svc.loadbalancer.server.port=80"
+
+ orga-pi:
+  container_name: orga-pi
+  image: organizr/organizr
+  restart: unless-stopped
+  ports:
+   - '${ORGANIZER_PORT}:80'
+  networks:
+   - proxy
+  security_opt:
+   - no-new-privileges:true
+  volumes:
+   - ${dockermedia}/orga-pi:/config
+  environment:
+   PUID: 1000
+   PGID: ${PGID}
+   TZ: ${TZ}
+  labels:
+   - "traefik.enable=true"
+   ## HTTP Routers
+   - "traefik.http.routers.organizr-rtr.entrypoints=https"
+   - "traefik.http.routers.organizr-rtr.rule=Host(`www.${domain_WAN}`)"
+   ## Middlewares
+   - "traefik.http.routers.organizr-rtr.middlewares=organizr-redirect@docker,chain-authelia@file"
+   # Redirect non-www to www middleware
+   - "traefik.http.middlewares.organizr-redirect.redirectregex.regex=^https?://${domain_WAN}/(.*)"
+   - "traefik.http.middlewares.organizr-redirect.redirectregex.replacement=https://www.${domain_WAN}/$${1}"
+   - "traefik.http.middlewares.organizr-redirect.redirectregex.permanent=true"
+   ## HTTP Services
+   - "traefik.http.routers.organizr-rtr.service=organizr-svc"
+   - "traefik.http.services.organizr-svc.loadbalancer.server.port=80"
+
+ code-pi:
+  image: linuxserver/code-server
+  container_name: code-pi
+  restart: unless-stopped
+  networks:
+   - proxy
+  volumes:
+   - ${dockermedia}:/home/coder/docker
+   - ${dockermedia}/code-pi:/config
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: ${TZ}
+   PASSWORD: ${pihole_password}
+  labels:
+   - "traefik.enable=true"
+   ## HTTP Routers
+   - "traefik.http.routers.vscode-rtr.entrypoints=https"
+   - "traefik.http.routers.vscode-rtr.rule=Host(`code-pi.${domain_WAN}`)"
+   ## HTTP Services
+   - "traefik.http.routers.vscode-rtr.service=vscode-svc"
+   - "traefik.http.services.vscode-svc.loadbalancer.server.port=8443"
+   ## Middlewares
+   - "traefik.http.routers.vscode-rtr.middlewares=chain-authelia@file"
+
+ glan-pi:
+  image: jdreinhardt/glances:latest
+  container_name: glan-pi
+  restart: unless-stopped
+  privileged: true
+  ports:
+   - '61208:61208'
+  networks:
+   - proxy
+  security_opt:
+   - no-new-privileges:true
+  pid: host
+  volumes:
+   - ${dockermedia}/glan-pi:/etc/glances # Use this if you want to add a glances.conf file
+   - /var/run/docker.sock:/var/run/docker.sock:ro # Use Docker Socket Proxy instead for improved security
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: ${TZ}
+   # GLANCES_OPT: "-C /glances/conf/glances.conf --quiet --export influxdb"
+   GLANCES_OPT: "-w"
+  labels:
+   - traefik.enable=true
+   ## HTTP Routers
+   - traefik.http.routers.glan-pi-services01-rtr.entrypoints=https
+   - traefik.http.routers.glan-pi-services01-rtr.rule=Host(`services01-glan.${domain_WAN}`)
+   ## Middlewares
+   - traefik.http.routers.glan-pi-services01-rtr.middlewares=chain-authelia@file
+   ## HTTP Services
+   - traefik.http.routers.glan-pi-services01-rtr.service=glan-pi-services01-svc
+   - traefik.http.services.glan-pi-services01-svc.loadbalancer.server.port=61208
+
+ agent:
+  image: portainer/agent
+  container_name: portainer_agent
+  restart: unless-stopped
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: ${TZ}
+  volumes:
+   - /var/run/docker.sock:/var/run/docker.sock
+   - /var/lib/docker/volumes:/var/lib/docker/volumes
+  ports:
+   - '0.0.0.0:9001:9001/tcp'
+  
+   ## Remove if Zero is working
+ hole-pi:
+  container_name: hole-pi
+  domainname: ${domain_WAN}
+  image: pihole/pihole:latest
+  networks:
+   dns-net:
+  ports:
+   - '0.0.0.0:53:53/tcp'
+   - '0.0.0.0:53:53/udp'
+   - '0.0.0.0:67:67/udp'
+   - '0.0.0.0:86:80/tcp'
+  volumes:
+   - ${dockermedia}/pi-hole/data:/etc/pihole
+   - ${dockermedia}/pi-hole/dnsmasq:/etc/dnsmasq.d
+   - ${dockermedia}/pi-hole/pihole.log:/var/log/pihole.log
+   - /etc/localtime:/etc/localtime:ro
+   - ${dockermedia}/shared:/shared
+  dns:
+   - 127.0.0.1
+  hostname: 'hole-pi'
+  depends_on:
+   - bound-pi
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: ${TZ}
+   ServerIP: ${localDNS}
+   VIRTUAL_HOST: hole-pi.${domain_WAN}
+   WEBPASSWORD: ${pihole_password}
+   DNS1: 127.0.0.1#5335
+  restart: unless-stopped
+  cap_add:
+   - NET_ADMIN
+
+ bound-pi:
+  image: mvance/unbound-rpi
+  container_name: bound-pi
+  restart: unless-stopped
+  volumes:
+   - ${dockermedia}/pi-hole/unbound:/opt/unbound/etc/unbound
+   - /etc/localtime:/etc/localtime:ro
+  ports:
+   - "127.0.0.1:5335:5335/tcp"
+   - "127.0.0.1:5335:5335/udp"
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: ${TZ}
+  networks:
+   dns-net:
