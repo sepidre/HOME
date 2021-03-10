@@ -202,3 +202,16 @@ services:
    PGID: ${PGID}
    TZ: $TZ
    # CLI_ARGS: #optional
+
+ mqtt-pi:
+  image: eclipse-mosquitto
+  container_name: mqtt-pi
+  restart: always
+  volumes:
+   - ${dockermedia}/mqtt-pi/config:/mosquitto/config
+   - ${dockermedia}/mqtt-pi/data:/mosquitto/data
+   - ${dockermedia}/mqtt-pi/log:/mosquitto/log
+   - ${dockermedia}/shared:/shared
+  ports:
+   - "1883:1883"
+   - "9001:9001"
