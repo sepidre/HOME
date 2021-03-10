@@ -9,6 +9,7 @@ ToDo
 /HOMEcloud/containers/webdav/*
 /HOMEservices/containers/auth-pi/*
 /HOMEservices/containers/traefik/rules/*
+*.DS_Store
 
 !*.EXAMPLE
 !tls-opts.yml
