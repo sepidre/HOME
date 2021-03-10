@@ -4,6 +4,7 @@ networks:
  proxy:
   external: true
  dns-net:
+ bridge:
 
 secrets:
  authelia_jwt_secret:
