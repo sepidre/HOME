@@ -10,6 +10,7 @@ ToDo
 /HOMEservices/containers/auth-pi/*
 /HOMEservices/containers/traefik/rules/*
 *.DS_Store
+glances.config
 
 !*.EXAMPLE
 !tls-opts.yml
