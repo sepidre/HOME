@@ -3,8 +3,14 @@ version: '3.8'
 networks:
  proxy:
   external: true
- dns-net:
- bridge:
+ macvlan:
+  name: macvlan
+  driver: macvlan
+  driver_opts:
+    parent: eth0 #your ethernet interface
+  ipam:
+    config:
+      - subnet: ${localNET} # I use the same subnet as my LAN router.
 
 secrets:
  authelia_jwt_secret:
@@ -103,27 +109,44 @@ services:
     ipv4_address: 192.168.90.254 # You can specify a static IP
   dns:
    - 1.1.1.1
-   
- vpn:
-  image: bubuntux/nordvpn
-  container_name: vpn-pi
-  network_mode: bridge        # Required
-  cap_add:
-   - NET_ADMIN               # Required
-   - SYS_MODULE              # Required for TECHNOLOGY=NordLynx
-  sysctls:
-   - net.ipv4.conf.all.rp_filter=2
-  devices:
-   - /dev/net/tun            # Required
-  environment:                # Review https://github.com/bubuntux/nordvpn#environment-variables
-   - USER=${vpnuser}     # Required
-   - PASS=${vpnpassword} # Required
-   - CONNECT=Germany
-   - TECHNOLOGY=NordLynx
-   - NETWORK=192.168.1.0/24 
-   - DNS=${localDNS}
-  ports:
-   - ${vpnport}:8080
+
+ ##vpn:
+ # image: bubuntux/nordvpn
+ ## network_mode: bridge        # Required
+ # cap_add:
+ #  - NET_ADMIN               # Required
+ #  - SYS_MODULE              # Required for TECHNOLOGY=NordLynx
+ # sysctls:
+ #  - net.ipv4.conf.all.rp_filter=2
+ # devices:
+ #  - /dev/net/tun            # Required
+ ## environment:                # Review https://github.com/bubuntux/nordvpn#environment-variables
+ #  - USER=${vpnuser}     # Required
+ #  - "PASS=${vpnpassword}"         # Required
+ #  - CONNECT=Germany
+ #  - TECHNOLOGY=NordLynx
+ #  - NETWORK=192.168.1.0/24 
+ #  - DNS=${localDNS}
+ #  - DEBUG=on
+ # ports:
+ #  - 8181:8080
+
+ #office-pi:
+ # image: tvinhas/onlyoffice-arm
+ # container_name: office-pi
+ # restart: always
+ # labels:
+ #  - "traefik.enable=true"
+ #  ## HTTP Routers
+ #  - "traefik.http.routers.office-pi-rtr.entrypoints=https"
+ #  - "traefik.http.routers.office-pi-rtr.rule=Host(`office-pi.${domain_WAN}`)"
+ #  ## Middlewares
+ #  - "traefik.http.routers.office-pi-rtr.middlewares=chain-authelia@file"
+ #  ## HTTP Services
+#   - "traefik.http.routers.office-pi-rtr.service=office-pi-svc"
+ #  - "traefik.http.services.office-pi-svc.loadbalancer.server.port=80"
+ # networks:
+ #  - proxy
 
  auth-pi:
   container_name: auth-pi
@@ -183,13 +206,40 @@ services:
    - "traefik.http.routers.phpmy-pi-rtr.rule=Host(`phpmy-pi.${domain_WAN}`)"
    - "traefik.http.routers.phpmy-pi-rtr.tls=true"
    ## Middlewares
-   #- "traefik.http.routers.phpmy-pi-rtr.middlewares=chain-no-auth@file" # No Authentication
    - "traefik.http.routers.phpmy-pi-rtr.middlewares=chain-authelia@file"
    ## HTTP Services
    - "traefik.http.routers.phpmy-pi-rtr.service=phpmy-pi-svc"
    - "traefik.http.services.phpmy-pi-svc.loadbalancer.server.port=80"
   networks:
    proxy:
+
+ enkeysiast:
+  image: wordpress:latest
+  container_name: enkeysiast
+  domainname: ${domain_WAN}
+  restart: unless-stopped
+  volumes:
+   - ${dockermedia}/enkeysiast:/var/www/html
+  labels:
+   - "traefik.enable=true"
+   ## HTTP Routers
+   - "traefik.http.routers.enkeysiast-rtr.entrypoints=https"
+   - "traefik.http.routers.enkeysiast-rtr.rule=Host(`enkeysiast.${domain_WAN}`)"
+   - "traefik.http.routers.enkeysiast-rtr.tls=true"
+   ## Middlewares
+   - "traefik.http.routers.enkeysiast-rtr.middlewares=chain-no-auth@file"
+   ## HTTP Services
+   - "traefik.http.routers.enkeysiast-rtr.service=enkeysiast-svc"
+   - "traefik.http.services.enkeysiast-svc.loadbalancer.server.port=80"
+  networks:
+   - proxy
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: ${TZ}
+   WORDPRESS_DB_HOST: ${mysql_db_host}
+   WORDPRESS_DB_PASSWORD: ${mysql_db_root}
+   WORDPRESS_DB_NAME: enkeysiast_DB
 
  gua-pi:
   image: oznu/guacamole:armhf
@@ -350,53 +400,41 @@ services:
    - '0.0.0.0:9001:9001/tcp'
   
    ## Remove if Zero is working
+
  hole-pi:
   container_name: hole-pi
+  image: cbcrowe/pihole-unbound:latest
+  hostname: hole-pi
   domainname: ${domain_WAN}
-  image: pihole/pihole:latest
-  networks:
-   dns-net:
+  networks:  
+    macvlan:
+     ipv4_address: ${localDNS}
   ports:
-   - '0.0.0.0:53:53/tcp'
-   - '0.0.0.0:53:53/udp'
-   - '0.0.0.0:67:67/udp'
-   - '0.0.0.0:86:80/tcp'
-  volumes:
-   - ${dockermedia}/pi-hole/data:/etc/pihole
-   - ${dockermedia}/pi-hole/dnsmasq:/etc/dnsmasq.d
-   - ${dockermedia}/pi-hole/pihole.log:/var/log/pihole.log
-   - /etc/localtime:/etc/localtime:ro
-   - ${dockermedia}/shared:/shared
-  dns:
-   - 127.0.0.1
-  hostname: 'hole-pi'
-  depends_on:
-   - bound-pi
+    - 443:443/tcp
+    - 53:53/tcp
+    - 53:53/udp
+    - 80:80/tcp
+    # - 5335:5335/tcp # Uncomment to enable unbound access on local server
+    # - 22/tcp # Uncomment to enable SSH
   environment:
-   PUID: ${PUID}
-   PGID: ${PGID}
-   TZ: ${TZ}
-   ServerIP: ${localDNS}
-   VIRTUAL_HOST: hole-pi.${domain_WAN}
-   WEBPASSWORD: ${pihole_password}
-   DNS1: 127.0.0.1#5335
+    PUID: ${PUID}
+    PGID: ${PGID}
+    ServerIP: ${localDNS}
+    TZ: ${TZ}
+    WEBPASSWORD: ${pihole_password}
+    REV_SERVER: ${pihole_REV_SERVER}
+    REV_SERVER_TARGET: ${pihole_REV_SERVER_TARGET}
+    REV_SERVER_DOMAIN: ${pihole_REV_SERVER_DOMAIN}
+    REV_SERVER_CIDR: ${pihole_REV_SERVER_CIDR}
+    DNS1: 127.0.0.1#5335 # Hardcoded to our Unbound server
+    DNS2: 127.0.0.1#5335 # Hardcoded to our Unbound server
+    DNSSEC: "true" # Enable DNSSEC
+  volumes:
+    - ${dockermedia}/pi-hole/data:/etc/pihole:rw
+    - ${dockermedia}/pi-hole/dnsmasq:/etc/dnsmasq.d:rw
+    - ${dockermedia}/pi-hole/pihole.log:/var/log/pihole.log
+    - /etc/localtime:/etc/localtime:ro
+    - ${dockermedia}/shared:/shared
   restart: unless-stopped
   cap_add:
    - NET_ADMIN
-
- bound-pi:
-  image: mvance/unbound-rpi
-  container_name: bound-pi
-  restart: unless-stopped
-  volumes:
-   - ${dockermedia}/pi-hole/unbound:/opt/unbound/etc/unbound
-   - /etc/localtime:/etc/localtime:ro
-  ports:
-   - "127.0.0.1:5335:5335/tcp"
-   - "127.0.0.1:5335:5335/udp"
-  environment:
-   PUID: ${PUID}
-   PGID: ${PGID}
-   TZ: ${TZ}
-  networks:
-   dns-net:
