@@ -12,6 +12,8 @@ ToDo
 *.DS_Store
 glances.config
 
+.vscode
+
 !*.EXAMPLE
 !tls-opts.yml
 !middlewares-chaines.toml
