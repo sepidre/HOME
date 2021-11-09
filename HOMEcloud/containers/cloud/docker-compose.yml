@@ -4,6 +4,26 @@ networks:
  seafile-net:
 
 services:
+ watchtower:
+  command: --label-enable --cleanup --interval 300
+  image: containrrr/watchtower
+  container_name: watchtower
+  #environment: 
+  # WATCHTOWER_NOTIFICATIONS: email
+  # WATCHTOWER_NOTIFICATION_EMAIL_FROM: ${EMAIL_FROM}
+  # WATCHTOWER_NOTIFICATION_EMAIL_TO: ${EMAIL_TO}
+  # WATCHTOWER_NOTIFICATION_EMAIL_SERVER: ${EMAIL_SERVER}
+  # WATCHTOWER_NOTIFICATION_EMAIL_SERVER_PORT: 25
+  # WATCHTOWER_NOTIFICATION_EMAIL_SERVER_USER: ${EMAIL_TO}
+  # WATCHTOWER_NOTIFICATION_EMAIL_SERVER_PASSWORD: ${EMAIL_PWD}
+  # WATCHTOWER_NOTIFICATION_EMAIL_DELAY: 2
+  labels:
+   - "com.centurylinklabs.watchtower.enable=true"
+  network_mode: none
+  restart: always
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+
  cloudflare-ddns:
   container_name: cloudi-pi
   image: oznu/cloudflare-ddns:latest
@@ -14,55 +34,69 @@ services:
    TZ: ${TZ}
    API_KEY: ${cloudflareapi}
    ZONE: ${cloudflarezone}
-   DNS_SERVER: 1.1.1.1
+   DNS_SERVER: ${cloudflareDNS}
   volumes:
-   - /etc/localtime:/etc/localtime:ro
+   - /etc/localtime:/etc/localtime:ro   
 
  jelly-pi:
   image: jellyfin/jellyfin
   container_name: jelly-pi
+  labels:
+   - "com.centurylinklabs.watchtower.enable=true"
+  depends_on:
+   - watchtower
   environment:
    PUID: ${PUID}
    PGID: ${PGID}
    TZ: ${TZ}
   volumes:
    - ${dockermedia}/jelly-pi:/config
+   - ${dockermedia}/data/family:/data/family
+   - ${dockermedia}/data/anime:/data/anime
    - ${dockermedia}/data/tvseries:/data/tvshows
    - ${dockermedia}/data/movies:/data/movies
    - /opt/vc/lib:/opt/vc/lib #optional
+   - /dev/vchiq:/dev/vchiq
   ports:
-   - 8096:8096
-   - 7359:7359/udp #optional
-   - 1900:1900/udp #optional
+   - ${jellyfin_MAIN_PORT}:8096
+   - ${jellyfin_UDP1_PORT}:7359/udp #optional
+   - ${jellyfin_UDP2_PORT}:1900/udp #optional
   restart: unless-stopped
 
-   
  glan-pi:
   image: jdreinhardt/glances:latest
   container_name: glan-pi
   restart: unless-stopped
+  labels:
+   - "com.centurylinklabs.watchtower.enable=true"
+  depends_on:
+   - watchtower
   privileged: true
   ports:
-   - '61208:61208'
+   - '${glances_PORT}:61208'
   security_opt:
    - no-new-privileges:true
   pid: host
   volumes:
-   - ${dockermedia}/glan-pi:/etc/glances # Use this if you want to add a glances.conf file
+   - ${dockermedia}/glan-pi:/glances/conf/ # Use this if you want to add a glances.conf file
    - /var/run/docker.sock:/var/run/docker.sock:ro # Use Docker Socket Proxy instead for improved security
   environment:
    PUID: ${PUID}
    PGID: ${PGID}
    TZ: ${TZ}
-   # GLANCES_OPT: "-C /glances/conf/glances.conf --quiet --export influxdb"
+   #GLANCES_OPT: "--export mqtt"
    GLANCES_OPT: "-w"
 
 ## Databases
  # InfluxDB - Database for sensor data
  # Create influxdb.conf
  influx_db:
-  image: influxdb:latest
+  image: hypriot/rpi-influxdb
   container_name: influx_db
+  labels:
+   - "com.centurylinklabs.watchtower.enable=true"
+  depends_on:
+   - watchtower
   restart: unless-stopped
   security_opt:
     - no-new-privileges:true
@@ -76,13 +110,17 @@ services:
   # Redis - Key-value Store
  redis_db:
   container_name: redis_db
-  image: redis:latest
+  image: redis:5
   restart: unless-stopped
   entrypoint: redis-server --appendonly yes --requirepass ${redis_db_pw} --maxmemory 512mb --maxmemory-policy allkeys-lru
   environment:
    PUID: ${PUID}
    PGID: ${PGID}
    TZ: ${TZ}
+  labels:
+   - "com.centurylinklabs.watchtower.enable=true"
+  depends_on:
+   - watchtower
   ports:
    - "${redis_db_port}:6379"
   security_opt:
@@ -96,6 +134,10 @@ services:
   image: hypriot/rpi-mysql
   container_name: mysql_db
   restart: unless-stopped
+  labels:
+   - "com.centurylinklabs.watchtower.enable=true"
+  depends_on:
+   - watchtower
   ports:
    - "${mysql_db_port}:3306"
   environment:
@@ -108,6 +150,57 @@ services:
    - /etc/localtime:/etc/localtime:ro
    - ${dockermedia}/shared:/shared
      
+ maria-db:
+  image: tobi312/rpi-mariadb:10.5
+  container_name: maria_db
+  restart: unless-stopped
+  labels:
+   - "com.centurylinklabs.watchtower.enable=true"
+  depends_on:
+   - watchtower
+  ports:
+   - ${maria_db_port}:3306
+  command: --transaction-isolation=READ-COMMITTED --binlog-format=ROW --innodb-file-per-table=1
+  volumes:
+   - ${dockermedia}/maria_db:/var/lib/mysql
+  environment:
+   PUID: ${PUID}
+   PGID: ${PGID}
+   TZ: ${TZ}
+   MYSQL_ROOT_PASSWORD: ${mysql_db_root}
+   MYSQL_PASSWORD: ${webdav_password}
+   MYSQL_DATABASE: nextcloud
+   MYSQL_USER: ${webdav_user}
+  healthcheck:
+   test:  mysqladmin ping -h 127.0.0.1 -u root --password=${mysql_db_root} || exit 1
+   interval: 60s
+   timeout: 5s
+   retries: 5  
+
+ next-pi:
+  image: nextcloud
+  container_name: next-pi
+  restart: unless-stopped
+  labels:
+   - "com.centurylinklabs.watchtower.enable=true"
+  volumes:
+   - ${dockermedia}/next-pi:/var/www/html
+  depends_on:
+   - maria-db
+   - redis_db
+   - watchtower
+  ports:
+   - "${next_PORT}:80"
+  environment:
+   MYSQL_PASSWORD: ${webdav_password}
+   MYSQL_DATABASE: nextcloud
+   MYSQL_USER: ${webdav_user}
+   MYSQL_HOST: ${db_host}:${maria_db_port}
+   PHP_UPLOAD_LIMIT: 10G
+   PHP_MEMORY_LIMIT: 512M
+   REDIS_HOST: ${db_host}
+   REDIS_HOST_PASSWORD: ${redis_db_pw}
+  
  memcached:
   image: memcached:1.5.6
   container_name: memcached
@@ -132,7 +225,7 @@ services:
    - /etc/localtime:/etc/localtime:ro
   environment:
    TZ: ${TZ}
-   DB_HOST: ${mysql_db_host}
+   DB_HOST: ${db_host}
    DB_ROOT_PASSWD: ${mysql_db_root}
    SEAFILE_ADMIN_EMAIL: ${seafile_admin}
    SEAFILE_ADMIN_PASSWORD: ${seafile_admin_password} 
@@ -145,7 +238,7 @@ services:
    - seafile-net
   ports:
    - "81:80"
-   ## For a fresh start uncomment
+   ## For a fresh start
    #DROP DATABASE seahub_db;
    #DROP DATABASE seafile_db;
    #DROP DATABASE ccnet_db;  
@@ -155,6 +248,10 @@ services:
   container_name: dav-pi
   domainname: ${domain_WAN}
   restart: unless-stopped
+  labels:
+   - "com.centurylinklabs.watchtower.enable=true"
+  depends_on:
+   - watchtower
   volumes:
    - /etc/localtime:/etc/localtime:ro
    - /mnt/containers/webdav:/media
@@ -166,13 +263,17 @@ services:
    USERNAME: ${webdav_user}
    PASSWORD: ${webdav_password}
   ports:
-   - "82:80"
+   - "${webdav_PORT}:80"
 
  port-pi:
   image: portainer/portainer
   container_name: port-pi
   domainname: ${domain_WAN}
   restart: unless-stopped
+  labels:
+   - "com.centurylinklabs.watchtower.enable=true"
+  depends_on:
+   - watchtower
   environment:
    PUID: ${PUID}
    PGID: ${PGID}
@@ -183,17 +284,21 @@ services:
    - ${dockermedia}/portainer:/data
    - ${dockermedia}/shared:/shared
   ports:
-   - "83:9000"
+   - "${portainer_PORT}:9000"
 
  # Duplicati - Backup
  bkp-pi:
   image: linuxserver/duplicati:latest
   container_name: bkp-pi
   restart: unless-stopped
+  labels:
+   - "com.centurylinklabs.watchtower.enable=true"
+  depends_on:
+   - watchtower
   security_opt:
    - no-new-privileges:true
   ports:
-   - "8200:8200"
+   - "${duplicati_PORT}:8200"
   volumes:
    - ${dockermedia}/duplicati:/config
    - ${dockermedia}:/nas
@@ -202,3 +307,20 @@ services:
    PGID: ${PGID}
    TZ: $TZ
    # CLI_ARGS: #optional
+   
+ mqtt-pi:
+  image: eclipse-mosquitto
+  container_name: mqtt-pi
+  restart: always
+  labels:
+   - "com.centurylinklabs.watchtower.enable=true"
+  depends_on:
+   - watchtower
+  volumes:
+   - ${dockermedia}/mqtt-pi/config:/mosquitto/config
+   - ${dockermedia}/mqtt-pi/data:/mosquitto/data
+   - ${dockermedia}/mqtt-pi/log:/mosquitto/log
+   - ${dockermedia}/shared:/shared
+  ports:
+   - "${MOSQUITTO_PORT1}:1883"
+   - "${MOSQUITTO_PORT2}:9001"
