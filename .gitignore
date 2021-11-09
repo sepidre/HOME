@@ -11,6 +11,7 @@ ToDo
 /HOMEservices/containers/traefik/rules/*
 *.DS_Store
 glances.config
+/HOMEcloud/containers/next-pi/config.php
 
 .vscode
 
