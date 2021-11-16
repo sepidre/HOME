@@ -9,9 +9,11 @@ ToDo
 /HOMEcloud/containers/webdav/*
 /HOMEservices/containers/auth-pi/*
 /HOMEservices/containers/traefik/rules/*
+/HOMEservices/containers/shair-pi/*
 *.DS_Store
 glances.config
 /HOMEcloud/containers/next-pi/config.php
+
 
 .vscode
 

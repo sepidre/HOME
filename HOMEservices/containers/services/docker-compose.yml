@@ -342,3 +342,18 @@ services:
    ## HTTP Services
    - traefik.http.routers.hole-pi-rtr.service=hole-pi-svc
    - traefik.http.services.hole-pi-svc.loadbalancer.server.port=88
+   
+ shairport-sync:
+  container_name: shairport-sync
+  image: orbsmiv/shairport-sync-rpi:latest
+  network_mode: host
+  devices:
+   - /dev/snd:/dev/snd
+  environment:
+    PUID: ${PUID}
+    PGID: ${PGID}
+    ServerIP: ${localDNS}
+    TZ: ${TZ}
+    AIRPLAY_NAME: Wohnzimmer
+  volumes:
+    - ${dockermedia}/shair-pi/shairport-sync.conf:/etc/shairport-sync.conf
