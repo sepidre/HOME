@@ -20,3 +20,4 @@ glances.config
 !*.EXAMPLE
 !tls-opts.yml
 !middlewares-chaines.toml
+.vscode/settings.json
