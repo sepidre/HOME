@@ -9,7 +9,7 @@ The Image for the SD Card is from this place: https://github.com/hypriot/image-b
 
 I also had very much help from https://www.smarthomebeginner.com!
 
-## update container 
+## update container versions
 ```
 cd /mnt/containers/services && docker-compose --env-file /mnt/containers/secrets/.env pull && docker-compose --env-file /mnt/containers/secrets/.env up -d --remove-orphans --force-recreate && docker image prune -f
 ```
