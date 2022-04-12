@@ -4,13 +4,14 @@
             "name": "HOMEcloud",
             "username": "root",
             "host": "HOMEcloud",
-            "label": "HOMEcloud"
+            "label": "HOMEcloud",
+            "privateKeyPath": "c:\\Users\\StephanDreis\\.ssh\\id_rsa"
         },
         {
             "name": "HOMEservices01",
             "label": "HOMEservices01",
-            "host": "192.168.1.20",
-            "username": "sepidre",
+            "host": "HOMEservices01",
+            "username": "root",
             "privateKeyPath": "c:\\Users\\StephanDreis\\.ssh\\id_rsa"
         }
     ]
